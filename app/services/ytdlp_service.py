@@ -55,36 +55,55 @@ def base_ydl_opts() -> dict:
         "nocheckcertificate": True,
         "ignoreerrors": False,
         "noplaylist": True,
-        "force_ipv4": True,
-
-        # Android client bypasses most bot detection
+        
+        # ⚠️ Aggressive anti-blocking config for Render
+        "retries": 10,
+        "fragment_retries": 10,
+        "socket_timeout": 60,
+        "skip_unavailable_fragments": True,
+        
+        # Don't force IPv4 on Render (may be flagged more)
+        # "force_ipv4": True,
+        
+        # Multiple player clients
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "web"],
+                "player_client": ["android", "web", "tv", "mweb"],
+                "skip": ["hls", "dash"],
             }
         },
 
-        # Retry config
-        "retries": 5,
-        "fragment_retries": 5,
-        "socket_timeout": 30,
-
+        # Realistic browser headers
         "http_headers": {
-            "User-Agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
         },
+        
+        # Reduce load
+        "ratelimit": 100000,  # 100KB/s limit
+        "sleep_interval": 1,
+        "max_sleep_interval": 5,
     }
 
     # Add cookies
     if COOKIES_PATH and Path(COOKIES_PATH).exists():
         opts["cookiefile"] = COOKIES_PATH
         print(f"🍪 yt-dlp using cookies: {COOKIES_PATH}")
+    else:
+        print(f"⚠️  No cookies - YouTube may block!")
 
-    # Add proxy if set
+    # Add proxy if set (e.g., from Bright Data, Oxylabs, etc.)
     proxy = os.getenv("PROXY_URL", "").strip()
     if proxy:
         opts["proxy"] = proxy
-        print(f"🌐 Using proxy")
-
+        opts["socket_timeout"] = 60  # Proxy needs more time
+        print(f"🌐 Using proxy: {proxy[:30]}...")
+    
     return opts
 
 # ── Fetch video info ─────────────────────────────────────
@@ -106,7 +125,7 @@ async def get_video_info(url: str) -> dict:
     except yt_dlp.utils.DownloadError as e:
         err = str(e)
         print(f"yt-dlp error: {err}")
-        if "Sign in" in err:
+        if "Sign in" in err or "bot" in err.lower():
             raise ValueError("RATE_LIMITED")
         if "unavailable" in err:
             raise ValueError("VIDEO_UNAVAILABLE")
@@ -114,9 +133,12 @@ async def get_video_info(url: str) -> dict:
             raise ValueError("VIDEO_PRIVATE")
         if "copyright" in err:
             raise ValueError("VIDEO_COPYRIGHT")
-        if "429" in err:
+        if "429" in err or "blocked" in err.lower():
             raise ValueError("RATE_LIMITED")
-        raise ValueError("FETCH_FAILED")
+        raise ValueError(f"FETCH_FAILED: {err[:100]}")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise ValueError(f"FETCH_FAILED: {str(e)[:100]}")
 
     return parse_video_info(raw)
 
